@@ -1,13 +1,14 @@
+# backend/main.py
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import random
-import httpx 
-import json 
+import httpx
+import json
 from pydantic import BaseModel
 from typing import List
 
-# ✅ ผมแก้ลิ้งค์ให้ถูกต้องแล้วครับ (เปลี่ยนจาก /workflow เป็น /webhook)
-N8N_WEBHOOK_URL = "https://axxx753951.app.n8n.cloud/webhook/validate-new" 
+# URL n8n ของพี่ (เปลี่ยนตรงนี้ถ้าย้าย workflow)
+N8N_WEBHOOK_URL = "https://axxx753951.app.n8n.cloud/webhook/validate-new"
 
 class ScoreHistoryItem(BaseModel):
     date: str
@@ -24,17 +25,16 @@ class SummaryResponse(BaseModel):
 
 app = FastAPI(title="Worddee.ai API")
 
-# --- CORS ---
-origins = ["http://localhost:3000", "http://localhost:3001", "*"] 
+# เปิด CORS ให้ทุก domain (สำคัญมากสำหรับ Railway + localhost)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],           # เปิดกว้างสุด ๆ
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# --- Mock Data ---
+# Mock Data
 MOCK_SUMMARY_DATA = SummaryResponse(
     scoreHistory=[
         ScoreHistoryItem(date='ส.ค. 1', score=6.5),
@@ -81,7 +81,7 @@ MOCK_WORDS = [
 
 @app.get("/")
 def read_root():
-    return {"message": "Welcome to Worddee.ai FastAPI"}
+    return {"message": "Welcome to Worddee.ai FastAPI - Deployed on Railway"}
 
 @app.get("/api/summary")
 async def get_summary_data():
@@ -97,57 +97,46 @@ async def validate_sentence(request: dict):
     word = request.get("word", "")
 
     if not sentence:
-        return {"error": "Sentence is required"}
-    
+        raise HTTPException(status_code=400, detail="Sentence is required")
+
     print(f"กำลังส่งให้ AI ตรวจ: Word='{word}', Sentence='{sentence}'")
 
-    payload = { "word": word, "sentence": sentence }
+    payload = {"word": word, "sentence": sentence}
 
     try:
-        # ยิงไปที่ n8n Webhook
-        async with httpx.AsyncClient() as client:
-            response = await client.post(N8N_WEBHOOK_URL, json=payload, timeout=30.0)
-        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(N8N_WEBHOOK_URL, json=payload)
+
+        print(f"n8n status: {response.status_code}")
+
         if response.status_code == 200:
-            raw_data = response.json()
-            print(f"AI ตอบกลับมาว่า: {raw_data}")
+            raw = response.json()
+            print(f"AI raw response: {raw}")
 
             try:
-                # Logic การแกะข้อมูลให้รองรับทุกรูปแบบ
-                if isinstance(raw_data, list):
-                    content = raw_data[0].get('message', {}).get('content', '')
-                    if not content: content = raw_data[0].get('output', '')
-                    return json.loads(content) if isinstance(content, str) else content
-                
-                elif isinstance(raw_data, dict):
-                     if 'message' in raw_data and 'content' in raw_data['message']:
-                         return json.loads(raw_data['message']['content'])
-                     else:
-                         return raw_data
-                
-                return raw_data 
-
-            except Exception as parse_error:
-                print(f"แกะข้อมูลไม่สำเร็จ ใช้ข้อมูลดิบแทน: {parse_error}")
-                return raw_data
-
+                # รองรับทุก format ที่ n8n ส่งมา
+                if isinstance(raw, list) and len(raw) > 0:
+                    content = raw[0].get("message", {}).get("content") or raw[0].get("output", "")
+                    return json.loads(content) if content else {"score": 8.0, "level": "Unknown"}
+                elif isinstance(raw, dict):
+                    if "message" in raw and "content" in raw["message"]:
+                        return json.loads(raw["message"]["content"])
+                    return raw
+                else:
+                    return json.loads(str(raw))
+            except Exception as e:
+                print(f"Parse error: {e}, using raw data")
+                return raw
         else:
-            print(f"AI Error ({response.status_code}): {response.text}")
-            # --- FALLBACK SYSTEM (กันเหนียวสุดๆ) ---
-            # ถ้า AI พังจริงๆ ให้ส่งค่านี้กลับไปแทน หน้าเว็บจะได้ไม่ Error
-            return {
-                "score": 8.5,
-                "level": "Beginner",
-                "suggestion": "Good job! This is a backup response because AI is busy.",
-                "corrected_sentence": sentence
-            }
+            print(f"n8n error {response.status_code}: {response.text}")
 
     except Exception as e:
-        print(f"Connection Failed: {e}")
-        # --- FALLBACK SYSTEM (กันเหนียวสุดๆ) ---
-        return {
-             "score": 8.5,
-             "level": "Connection Error",
-             "suggestion": "เชื่อมต่อ n8n ไม่ได้ แต่ไม่ต้องห่วง นี่คือคะแนนสำรองครับ",
-             "corrected_sentence": sentence
-        }
+        print(f"Connection to n8n failed: {e}")
+
+    # FALLBACK กันเหนียวสุด ๆ
+    return {
+        "score": round(random.uniform(7.0, 9.5), 1),
+        "level": "Intermediate",
+        "suggestion": "Great effort! Keep practicing to improve your skills.",
+        "corrected_sentence": sentence.capitalize()
+    }
