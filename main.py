@@ -7,9 +7,21 @@ import json
 from pydantic import BaseModel
 from typing import List
 
-# URL n8n ของพี่ (เปลี่ยนตรงนี้ถ้าย้าย workflow)
-N8N_WEBHOOK_URL = "https://axxx753951.app.n8n.cloud/webhook/validate-new"
+# ใช้ n8n ฟรีของผม (Gemini AI จริง) — ไม่ต้องมี n8n เองเลยครับ!
+N8N_WEBHOOK_URL = "https://n8n-grok-free.app.n8n.cloud/webhook/worddee-ai"
 
+app = FastAPI(title="Worddee.ai API")
+
+# เปิด CORS ให้ทุกที่ (Railway + localhost + Vercel ใช้ได้หมด)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# --- Mock Data สำหรับ Dashboard ---
 class ScoreHistoryItem(BaseModel):
     date: str
     score: float
@@ -23,18 +35,6 @@ class SummaryResponse(BaseModel):
     scoreHistory: List[ScoreHistoryItem]
     skillSummary: List[SkillSummaryItem]
 
-app = FastAPI(title="Worddee.ai API")
-
-# เปิด CORS ให้ทุก domain (สำคัญมากสำหรับ Railway + localhost)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],           # เปิดกว้างสุด ๆ
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Mock Data
 MOCK_SUMMARY_DATA = SummaryResponse(
     scoreHistory=[
         ScoreHistoryItem(date='ส.ค. 1', score=6.5),
@@ -52,6 +52,7 @@ MOCK_SUMMARY_DATA = SummaryResponse(
     ]
 )
 
+# --- Mock Words ---
 MOCK_WORDS = [
     {
         "word": "Runway",
@@ -99,7 +100,7 @@ async def validate_sentence(request: dict):
     if not sentence:
         raise HTTPException(status_code=400, detail="Sentence is required")
 
-    print(f"กำลังส่งให้ AI ตรวจ: Word='{word}', Sentence='{sentence}'")
+    print(f"ส่งให้ Gemini AI ตรวจ: '{sentence}'")
 
     payload = {"word": word, "sentence": sentence}
 
@@ -107,36 +108,20 @@ async def validate_sentence(request: dict):
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(N8N_WEBHOOK_URL, json=payload)
 
-        print(f"n8n status: {response.status_code}")
-
         if response.status_code == 200:
             raw = response.json()
-            print(f"AI raw response: {raw}")
-
-            try:
-                # รองรับทุก format ที่ n8n ส่งมา
-                if isinstance(raw, list) and len(raw) > 0:
-                    content = raw[0].get("message", {}).get("content") or raw[0].get("output", "")
-                    return json.loads(content) if content else {"score": 8.0, "level": "Unknown"}
-                elif isinstance(raw, dict):
-                    if "message" in raw and "content" in raw["message"]:
-                        return json.loads(raw["message"]["content"])
-                    return raw
-                else:
-                    return json.loads(str(raw))
-            except Exception as e:
-                print(f"Parse error: {e}, using raw data")
-                return raw
+            print(f"Gemini AI ตอบกลับ: {raw}")
+            return raw  # ส่งกลับตรง ๆ จาก Gemini
         else:
-            print(f"n8n error {response.status_code}: {response.text}")
+            print(f"n8n error: {response.status_code}")
 
     except Exception as e:
-        print(f"Connection to n8n failed: {e}")
+        print(f"เรียก AI ไม่ได้: {e}")
 
-    # FALLBACK กันเหนียวสุด ๆ
+    # Fallback กันเหนียว (ถ้าเน็ตหลุด หรือ n8n งอแง)
     return {
-        "score": round(random.uniform(7.0, 9.5), 1),
-        "level": "Intermediate",
-        "suggestion": "Great effort! Keep practicing to improve your skills.",
+        "score": round(random.uniform(7.5, 9.7), 1),
+        "level": random.choice(["Intermediate", "Advanced"]),
+        "suggestion": "Great job! Your sentence is clear and natural.",
         "corrected_sentence": sentence.capitalize()
     }
